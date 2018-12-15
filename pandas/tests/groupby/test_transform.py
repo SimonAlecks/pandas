@@ -765,53 +765,38 @@ def test_pad_stable_sorting(fill_method):
 
 
 @pytest.mark.parametrize("test_series", [True, False])
-@pytest.mark.parametrize("shuffle", [True, False])
+@pytest.mark.parametrize("freq", [
+    None,
+    pytest.param('D', marks=pytest.mark.xfail(
+        reason='GH#23918 before method uses freq in vectorized approach'))])
 @pytest.mark.parametrize("periods,fill_method,limit", [
     (1, 'ffill', None), (1, 'ffill', 1),
     (1, 'bfill', None), (1, 'bfill', 1),
     (-1, 'ffill', None), (-1, 'ffill', 1),
-    (-1, 'bfill', None), (-1, 'bfill', 1)])
-def test_pct_change(test_series, shuffle, periods, fill_method, limit):
-    # Groupby pct change uses an apply if monotonic and a vectorized operation if non-monotonic
-    # Shuffle parameter tests each
-    vals = [np.nan, np.nan, 1, 2, 4, 10, np.nan, np.nan]
+    (-1, 'bfill', None), (-1, 'bfill', 1),
+])
+def test_pct_change(test_series, freq, periods, fill_method, limit):
+    # GH  21200, 21621
+    vals = [3, np.nan, np.nan, np.nan, 1, 2, 4, 10, np.nan, 4]
     keys = ['a', 'b']
-    df = DataFrame({'key': [k for j in list(map(lambda x: [x] * len(vals), keys)) for k in j],
-                    'vals': vals * 2})
-    if shuffle:
-        df = df.reindex(np.random.permutation(len(df))).reset_index(drop=True)
+    key_v = np.repeat(keys, len(vals))
+    df = DataFrame({'key': key_v, 'vals': vals * 2})
 
-    manual_apply = []
-    for k in keys:
-        manual_apply.append(Series(df.loc[df.key == k, 'vals'].values).pct_change(periods=periods,
-                                                                                  fill_method=fill_method,
-                                                                                  limit=limit))
-    exp_vals = pd.concat(manual_apply).reset_index(drop=True)
-    exp = pd.DataFrame(exp_vals, columns=['_pct_change'])
-    grp = df.groupby('key')
+    df_g = getattr(df.groupby('key'), fill_method)(limit=limit)
+    grp = df_g.groupby('key')
 
-    def get_result(grp_obj):
-        return grp_obj.pct_change(periods=periods,
-                                  fill_method=fill_method,
-                                  limit=limit)
+    expected = grp['vals'].obj / grp['vals'].shift(periods) - 1
 
     # Specifically test when monotonic and not monotonic
 
     if test_series:
-        exp = exp.loc[:, '_pct_change']
-        grp = grp['vals']
-        result = get_result(grp)
-        # Resort order by keys to compare to expected values
-        df.insert(0, '_pct_change', result)
-        result = df.sort_values(by='key')
-        result = result.loc[:, '_pct_change']
-        result = result.reset_index(drop=True)
-        tm.assert_series_equal(result, exp)
+        result = df.groupby('key')['vals'].pct_change(
+            periods=periods, fill_method=fill_method, limit=limit, freq=freq)
+        tm.assert_series_equal(result, expected)
     else:
-        result = get_result(grp)
-        result.reset_index(drop=True, inplace=True)
-        result.columns = ['_pct_change']
-        tm.assert_frame_equal(result, exp)
+        result = df.groupby('key').pct_change(
+            periods=periods, fill_method=fill_method, limit=limit, freq=freq)
+        tm.assert_frame_equal(result, expected.to_frame('vals'))
 
 
 @pytest.mark.parametrize("func", [np.any, np.all])
